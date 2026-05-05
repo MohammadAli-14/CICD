@@ -189,24 +189,37 @@ ssh $SSH_OPTS "$VM_USER@$VM_IP" "sudo mkdir -p $DEPLOY_PATH && sudo chown $VM_US
 # Deploy files
 log_info "Deploying files to $VM_USER@$VM_IP:$DEPLOY_PATH"
 
+# Create temp directory for deployment
+TEMP_DIR="/tmp/deploy_$$"
+ssh $SSH_OPTS "$VM_USER@$VM_IP" "mkdir -p $TEMP_DIR" || {
+    log_error "Failed to create temporary directory on VM"
+    exit 1
+}
+
+# Upload files to temp directory
 for file in "${FILES_TO_DEPLOY[@]}"; do
     if [[ -f "$file" ]]; then
-        log_info "Uploading $file..."
-        if scp $SSH_OPTS "$file" "$VM_USER@$VM_IP:$DEPLOY_PATH/"; then
-            log_success "Deployed $file"
-
-            # Set proper permissions
-            ssh $SSH_OPPS "$VM_USER@$VM_IP" "chmod 644 $DEPLOY_PATH/$file" || {
-                log_warning "Could not set permissions for $file"
-            }
+        log_info "Uploading $file to temp..."
+        if scp $SSH_OPTS "$file" "$VM_USER@$VM_IP:$TEMP_DIR/"; then
+            log_success "Uploaded $file"
         else
-            log_error "Failed to deploy $file"
+            log_error "Failed to upload $file"
             exit 1
         fi
     else
         log_warning "File not found: $file (skipping)"
     fi
 done
+
+# Move files to final location with sudo
+log_info "Moving files to $DEPLOY_PATH with sudo..."
+ssh $SSH_OPTS "$VM_USER@$VM_IP" "sudo cp -f $TEMP_DIR/* $DEPLOY_PATH/ 2>/dev/null || cp -f $TEMP_DIR/* $DEPLOY_PATH/" || {
+    log_error "Failed to move files to deploy path"
+    exit 1
+}
+
+# Cleanup temp directory
+ssh $SSH_OPTS "$VM_USER@$VM_IP" "rm -rf $TEMP_DIR" || true
 
 # Set proper ownership (try with sudo, fallback without)
 log_info "Setting permissions on remote directory..."

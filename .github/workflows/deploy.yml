@@ -48,41 +48,46 @@ jobs:
           ssh -o ConnectTimeout=10 ${{ secrets.VM_USER }}@${{ secrets.VM_IP }} 'echo "SSH OK"'
           echo "✓ SSH connection successful"
 
-      - name: Ensure Remote Directory
+      - name: Ensure Remote Directory Exists
         run: |
-          echo "Creating remote directory: ${{ secrets.DEPLOY_PATH || '/var/www/html' }}"
-          ssh ${{ secrets.VM_USER }}@${{ secrets.VM_IP }} "mkdir -p ${{ secrets.DEPLOY_PATH || '/var/www/html' }}" || {
-            echo "Trying with sudo..."
-            ssh ${{ secrets.VM_USER }}@${{ secrets.VM_IP }} "sudo mkdir -p ${{ secrets.DEPLOY_PATH || '/var/www/html' }} && sudo chown ${{ secrets.VM_USER }}:${{ secrets.VM_USER }} ${{ secrets.DEPLOY_PATH || '/var/www/html' }}"
-          }
+          echo "Setting up remote directory: ${{ secrets.DEPLOY_PATH || '/var/www/html' }}"
+          DEPLOY_PATH="${{ secrets.DEPLOY_PATH || '/var/www/html' }}"
 
-      - name: Deploy Files with Rsync
+          # Create directory if needed, give user write access
+          ssh ${{ secrets.VM_USER }}@${{ secrets.VM_IP }} <<REMOTE
+            set -e
+            sudo mkdir -p "$DEPLOY_PATH"
+            # Give user ownership temporarily for deployment
+            sudo chown ${{ secrets.VM_USER }}:${{ secrets.VM_USER }} "$DEPLOY_PATH" 2>/dev/null || true
+            echo "Directory ready: $DEPLOY_PATH"
+          REMOTE
+
+      - name: Deploy Files via SCP
         run: |
           # Files to deploy
           FILES=("index.html" "app.php")
+          DEPLOY_PATH="${{ secrets.DEPLOY_PATH || '/var/www/html' }}"
 
           # Verify files exist
           for file in "${FILES[@]}"; do
             if [ -f "$file" ]; then
               echo "Found: $file"
             else
-              echo "Warning: $file not found"
+              echo "Error: $file not found"
+              exit 1
             fi
           done
 
-          # Rsync using SSH config
-          echo "Starting rsync deployment..."
-          DEPLOY_PATH="${{ secrets.DEPLOY_PATH || '/var/www/html' }}"
-          rsync -avz --progress \
-            --delete \
-            "${FILES[@]}" \
-            ${{ secrets.VM_USER }}@${{ secrets.VM_IP }}:$DEPLOY_PATH/
+          echo "Deploying files to ${{ secrets.VM_USER }}@${{ secrets.VM_IP }}:$DEPLOY_PATH"
 
-          echo "Rsync completed"
+          # Deploy using scp (we already set ownership to user, so write is allowed)
+          scp "${FILES[@]}" ${{ secrets.VM_USER }}@${{ secrets.VM_IP }}:$DEPLOY_PATH/
+
+          echo "Deployment completed successfully"
 
       - name: Set File Permissions
         run: |
-          echo "Setting permissions on remote server..."
+          echo "Setting permissions on deployed files..."
           DEPLOY_PATH="${{ secrets.DEPLOY_PATH || '/var/www/html' }}"
           ssh ${{ secrets.VM_USER }}@${{ secrets.VM_IP }} <<REMOTE
             set -e
@@ -95,10 +100,10 @@ jobs:
             echo "Setting directory permissions to 755..."
             find "$DEPLOY_PATH" -type d -exec chmod 755 {} \;
 
-            # Try setting web server ownership (Ubuntu uses www-data, CentOS uses apache)
+            # Ensure web server ownership
             sudo chown -R www-data:www-data "$DEPLOY_PATH" 2>/dev/null || \
             sudo chown -R apache:apache "$DEPLOY_PATH" 2>/dev/null || \
-            echo "Keeping current ownership"
+            echo "Note: Could not change ownership (may need manual adjustment)"
 
             echo "Permissions configured"
           REMOTE
