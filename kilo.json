@@ -1,0 +1,34 @@
+{
+  "name": "Kilo CICD Deployment",
+  "version": "1.0.0",
+  "description": "Automated CI/CD pipeline for deploying HTML/PHP to VM via SSH",
+  "commands": [
+    ".kilo/command/deploy.md"
+  ],
+  "agents": [
+    ".kilo/agent/deploy-agent.md"
+  ],
+  "workflows": [
+    ".github/workflows/deploy.yml"
+  ],
+  "scripts": {
+    "deploy": "deploy.sh",
+    "validate": "python validate.py"
+  },
+  "secrets": {
+    "VM_IP": "VM IP address (required)",
+    "VM_USER": "SSH username (required)",
+    "SSH_PRIVATE_KEY": "SSH private key (required)",
+    "DEPLOY_PATH": "Remote deploy path (optional, default: /var/www/html)"
+  },
+  "permissions": {
+    "ssh": true,
+    "network": true,
+    "file_write": true
+  },
+  "targets": {
+    "vm": "Remote Ubuntu/CentOS VM with Apache+PHP",
+    "github_actions": "Ubuntu-latest runner"
+  },
+  "documentation": "README.md"
+}

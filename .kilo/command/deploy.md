@@ -1,3 +1,10 @@
+---
+description: CICD deployment commands and setup guide
+agent: deploy-agent
+model: anthropic/claude-sonnet
+subtask: false
+---
+
 # Kilo CICD Deployment Commands
 
 ## Quick Commands

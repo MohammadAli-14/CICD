@@ -1,3 +1,15 @@
+---
+description: Advanced deployment and VM management agent
+mode: primary
+model: anthropic/claude-sonnet
+steps: 25
+color: "#10b981"
+permission:
+  bash: allow
+  edit:
+    "**/*.{yml,yaml,sh,php,html}": allow
+    "*": ask
+---
 # Kilo Deployment Agent
 
 ## Agent Overview
