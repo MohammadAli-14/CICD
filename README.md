@@ -1,22 +1,111 @@
 # 🚀 Kilo CICD - Automated VM Deployment
 
-A complete GitHub Actions workflow for deploying HTML and PHP files to a VM with Apache via SSH. This project provides zero-downtime deployments with comprehensive error handling and logging.
+**Quick Deploy:** Push to `main` → files automatically deployed to **20.187.148.79**
+
+A complete GitHub Actions workflow for deploying HTML and PHP files to your Azure VM (IP: `20.187.148.79`, user: `azureuser`) via SSH with Apache.
 
 ## 📋 Table of Contents
 
-- [Overview](#overview)
+- [Quick Start (Your VM)](#quick-start-your-vm)
 - [Prerequisites](#prerequisites)
-- [Quick Start](#quick-start)
-- [VM Setup](#vm-setup)
+- [VM Setup for Azure](#vm-setup-for-azure)
 - [GitHub Configuration](#github-configuration)
 - [Workflow Details](#workflow-details)
 - [Local Deployment](#local-deployment)
 - [Troubleshooting](#troubleshooting)
 - [Security](#security)
-- [Customization](#customization)
 - [Project Structure](#project-structure)
 
-## 🔍 Overview
+## ⚡ Quick Start (Your VM)
+
+### Your Settings
+- **VM IP:** `20.187.148.79`
+- **SSH User:** `azureuser`
+- **Deploy Path:** `/var/www/html` (default Apache document root)
+
+### 1. GitHub Secrets (DO THIS NOW)
+
+Go to your GitHub repo → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**
+
+Add these **4 secrets**:
+
+| Secret Name | Value | Required? |
+|-------------|-------|-----------|
+| `VM_IP` | `20.187.148.79` | ✅ Yes |
+| `VM_USER` | `azureuser` | ✅ Yes |
+| `SSH_PRIVATE_KEY` | Paste entire contents of your `.pem` file | ✅ Yes |
+| `DEPLOY_PATH` | `/var/www/html` | ⚠️ Optional (default) |
+
+**For SSH_PRIVATE_KEY:**
+- Open your `.pem` file in Notepad
+- Copy **everything** from `-----BEGIN RSA PRIVATE KEY-----` to `-----END RSA PRIVATE KEY-----`
+- Paste into the secret value field
+- Click "Add secret"
+
+### 2. Prepare Your VM
+
+SSH into your VM:
+
+```bash
+ssh -i /path/to/your-key.pem azureuser@20.187.148.79
+```
+
+Once logged in, run these commands on the VM:
+
+```bash
+# Update system
+sudo apt update && sudo apt upgrade -y
+
+# Install Apache + PHP
+sudo apt install -y apache2 php libapache2-mod-php
+
+# Start and enable Apache
+sudo systemctl start apache2
+sudo systemctl enable apache2
+
+# Give azureuser ownership of /var/www/html (needed for deployment)
+sudo chown -R azureuser:azureuser /var/www/html
+
+# Set standard permissions
+sudo chmod -R 755 /var/www/html
+
+# Allow SSH user to reload Apache (add to sudoers)
+echo 'azureuser ALL=(ALL) NOPASSWD: /usr/sbin/apachectl, /usr/sbin/service apache2 reload, /bin/systemctl reload apache2' | sudo tee /etc/sudoers.d/azureuser-apache
+
+# Verify PHP works
+echo '<?php phpinfo(); ?>' | sudo tee /var/www/html/test.php
+curl http://localhost/test.php | head -3
+
+# Open firewall (if using UFW)
+sudo ufw allow 22/tcp  # SSH (already open)
+sudo ufw allow 80/tcp   # HTTP
+sudo ufw reload
+
+exit
+```
+
+**Important:** The `chown azureuser:azureuser /var/www/html` step gives your SSH user write access to the web directory. Without this, deployment will fail with "Permission denied".
+
+### 3. Push to Deploy
+
+```bash
+git add .
+git commit -m "Configure deployment to Azure VM"
+git push origin main
+```
+
+Watch the workflow: **GitHub → Actions → Deploy to VM**
+
+### 4. Verify
+
+After workflow completes successfully:
+
+- Visit: **http://20.187.148.79/**
+- Visit: **http://20.187.148.79/app.php** (PHP status page)
+
+---
+
+## Prerequisites
 
 This repository contains a production-ready CI/CD pipeline that automatically deploys your web files to a virtual machine whenever you push to the main branch.
 
@@ -83,7 +172,9 @@ Watch the workflow run: Actions tab → Deploy to VM
 
 ## 🖥️ VM Setup
 
-### Ubuntu/Debian
+### Ubuntu/Debian (including Azure Ubuntu)
+
+> **Note for Azure users:** Default user is `azureuser`, which has sudo rights.
 
 1. **Update system**
 ```bash
@@ -399,11 +490,23 @@ sudo tail -f /var/log/httpd/error_log    # CentOS/RHEL
    chmod 644 ~/.ssh/kilo_deploy_key.pub
    ```
 3. **Never commit private keys** - they're in `.gitignore` by default
-4. **Rotate keys periodically** - generate new key pair every few months
-5. **Restrict key usage** in `authorized_keys`:
+4. **Rotate keys periodically**
+5. **Restrict key usage** in `authorized_keys` (optional):
    ```
    command="/usr/bin/rsync --server -v . /var/www/html",no-port-forwarding,no-X11-forwarding,no-agent-forwarding ssh-rsa AAAAB3NzaC1...
    ```
+
+### VM User Permissions
+
+Your deployment user (`azureuser`) needs:
+
+```bash
+# Ownership of web directory (ONE-TIME setup on VM)
+sudo chown -R azureuser:azureuser /var/www/html
+
+# Passwordless sudo for Apache reload (optional but recommended)
+echo 'azureuser ALL=(ALL) NOPASSWD: /usr/sbin/apachectl, /usr/sbin/service apache2 reload' | sudo tee /etc/sudoers.d/azureuser-apache
+```
 
 ### VM Security
 

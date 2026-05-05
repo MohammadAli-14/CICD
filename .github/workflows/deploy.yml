@@ -71,13 +71,10 @@ jobs:
 
           echo "Deploying to ${{ secrets.VM_USER }}@${{ secrets.VM_IP }}:$DEPLOY_PATH"
 
-          # Use rsync with sudo on remote side
-          rsync -avz --progress \
-            --rsync-path="sudo rsync" \
-            "${FILES[@]}" \
-            ${{ secrets.VM_USER }}@${{ secrets.VM_IP }}:$DEPLOY_PATH/
+          # Rsync (azureuser has write access due to chown on VM)
+          rsync -avz --progress "${FILES[@]}" ${{ secrets.VM_USER }}@${{ secrets.VM_IP }}:$DEPLOY_PATH/
 
-          echo "✓ Files transferred successfully"
+          echo "✓ Files deployed successfully"
 
       - name: Set Permissions & Ownership
         run: |

@@ -189,11 +189,9 @@ ssh $SSH_OPTS "$VM_USER@$VM_IP" "sudo mkdir -p $DEPLOY_PATH && sudo chown $VM_US
 # Deploy files using rsync over SSH
 log_info "Deploying files to $VM_USER@$VM_IP:$DEPLOY_PATH"
 
-# Use rsync with sudo on remote side
-# This allows writing to protected directories like /var/www/html
-RSYNC_OPTS="-avz --progress --rsync-path='sudo rsync'"
+# Simple rsync (user needs write permission to $DEPLOY_PATH)
+RSYNC_OPTS="-avz --progress"
 
-# Deploy all files
 if rsync $SSH_OPTS $RSYNC_OPTS "${FILES_TO_DEPLOY[@]}" "$VM_USER@$VM_IP:$DEPLOY_PATH/"; then
     log_success "All files deployed successfully"
 else
