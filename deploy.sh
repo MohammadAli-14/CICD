@@ -186,46 +186,39 @@ ssh $SSH_OPTS "$VM_USER@$VM_IP" "sudo mkdir -p $DEPLOY_PATH && sudo chown $VM_US
     }
 }
 
-# Deploy files
+# Deploy files using rsync over SSH
 log_info "Deploying files to $VM_USER@$VM_IP:$DEPLOY_PATH"
 
-# Create temp directory for deployment
-TEMP_DIR="/tmp/deploy_$$"
-ssh $SSH_OPTS "$VM_USER@$VM_IP" "mkdir -p $TEMP_DIR" || {
-    log_error "Failed to create temporary directory on VM"
+# Use rsync with sudo on remote side
+# This allows writing to protected directories like /var/www/html
+RSYNC_OPTS="-avz --progress --rsync-path='sudo rsync'"
+
+# Deploy all files
+if rsync $SSH_OPTS $RSYNC_OPTS "${FILES_TO_DEPLOY[@]}" "$VM_USER@$VM_IP:$DEPLOY_PATH/"; then
+    log_success "All files deployed successfully"
+else
+    log_error "Rsync deployment failed"
     exit 1
-}
+fi
 
-# Upload files to temp directory
-for file in "${FILES_TO_DEPLOY[@]}"; do
-    if [[ -f "$file" ]]; then
-        log_info "Uploading $file to temp..."
-        if scp $SSH_OPTS "$file" "$VM_USER@$VM_IP:$TEMP_DIR/"; then
-            log_success "Uploaded $file"
-        else
-            log_error "Failed to upload $file"
-            exit 1
-        fi
-    else
-        log_warning "File not found: $file (skipping)"
-    fi
-done
+# Set proper ownership and permissions
+log_info "Setting ownership and permissions on remote files..."
 
-# Move files to final location with sudo
-log_info "Moving files to $DEPLOY_PATH with sudo..."
-ssh $SSH_OPTS "$VM_USER@$VM_IP" "sudo cp -f $TEMP_DIR/* $DEPLOY_PATH/ 2>/dev/null || cp -f $TEMP_DIR/* $DEPLOY_PATH/" || {
-    log_error "Failed to move files to deploy path"
-    exit 1
-}
-
-# Cleanup temp directory
-ssh $SSH_OPTS "$VM_USER@$VM_IP" "rm -rf $TEMP_DIR" || true
-
-# Set proper ownership (try with sudo, fallback without)
-log_info "Setting permissions on remote directory..."
-ssh $SSH_OPTS "$VM_USER@$VM_IP" "sudo chown -R www-data:www-data $DEPLOY_PATH 2>/dev/null || chown -R $VM_USER:$VM_USER $DEPLOY_PATH" || {
+# Ownership: try www-data (Ubuntu) or apache (CentOS), fallback to user
+ssh $SSH_OPTS "$VM_USER@$VM_IP" "sudo chown -R www-data:www-data $DEPLOY_PATH 2>/dev/null || sudo chown -R apache:apache $DEPLOY_PATH 2>/dev/null || true" || {
     log_warning "Could not set ownership (may need manual adjustment)"
 }
+
+# File permissions: 644
+ssh $SSH_OPTS "$VM_USER@$VM_IP" "sudo find $DEPLOY_PATH -type f -name '*.html' -exec chmod 644 {} \; 2>/dev/null || true"
+ssh $SSH_OPTS "$VM_USER@$VM_IP" "sudo find $DEPLOY_PATH -type f -name '*.php' -exec chmod 644 {} \; 2>/dev/null || true"
+ssh $SSH_OPTS "$VM_USER@$VM_IP" "sudo find $DEPLOY_PATH -type f -name '*.css' -exec chmod 644 {} \; 2>/dev/null || true"
+ssh $SSH_OPTS "$VM_USER@$VM_IP" "sudo find $DEPLOY_PATH -type f -name '*.js' -exec chmod 644 {} \; 2>/dev/null || true"
+
+# Directory permissions: 755
+ssh $SSH_OPTS "$VM_USER@$VM_IP" "sudo find $DEPLOY_PATH -type d -exec chmod 755 {} \; 2>/dev/null || true"
+
+log_success "Permissions set successfully"
 
 # Optionally restart Apache (commented out by default)
 # Uncomment if you need Apache to reload

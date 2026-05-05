@@ -16,7 +16,6 @@ jobs:
 
       - name: Setup SSH
         run: |
-          # Create .ssh directory
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
 
@@ -24,10 +23,10 @@ jobs:
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
 
-          # Add VM to known hosts (avoid host key verification)
+          # Add VM to known hosts
           ssh-keyscan -H ${{ secrets.VM_IP }} >> ~/.ssh/known_hosts 2>/dev/null || true
 
-          # Create SSH config
+          # SSH config
           cat > ~/.ssh/config <<EOF
           Host ${{ secrets.VM_IP }}
             HostName ${{ secrets.VM_IP }}
@@ -44,27 +43,23 @@ jobs:
 
       - name: Test SSH Connection
         run: |
-          echo "Testing SSH to ${{ secrets.VM_USER }}@${{ secrets.VM_IP }}..."
           ssh -o ConnectTimeout=10 ${{ secrets.VM_USER }}@${{ secrets.VM_IP }} 'echo "SSH OK"'
           echo "✓ SSH connection successful"
 
       - name: Ensure Remote Directory Exists
         run: |
-          echo "Setting up remote directory: ${{ secrets.DEPLOY_PATH || '/var/www/html' }}"
-          DEPLOY_PATH="${{ secrets.DEPLOY_PATH || '/var/www/html' }}"
+          echo "Creating/verifying remote directory..."
+          ssh ${{ secrets.VM_USER }}@${{ secrets.VM_IP }} "sudo mkdir -p ${{ secrets.DEPLOY_PATH || '/var/www/html' }}" || {
+            echo "Warning: Could not create directory, attempting without sudo..."
+            ssh ${{ secrets.VM_USER }}@${{ secrets.VM_IP }} "mkdir -p ${{ secrets.DEPLOY_PATH || '/var/www/html' }}" || {
+              echo "Error: Failed to create directory"
+              exit 1
+            }
+          }
+          echo "Directory ready"
 
-          # Create directory if needed, give user write access
-          ssh ${{ secrets.VM_USER }}@${{ secrets.VM_IP }} <<REMOTE
-            set -e
-            sudo mkdir -p "$DEPLOY_PATH"
-            # Give user ownership temporarily for deployment
-            sudo chown ${{ secrets.VM_USER }}:${{ secrets.VM_USER }} "$DEPLOY_PATH" 2>/dev/null || true
-            echo "Directory ready: $DEPLOY_PATH"
-          REMOTE
-
-      - name: Deploy Files via SCP
+      - name: Deploy Files with Rsync
         run: |
-          # Files to deploy
           FILES=("index.html" "app.php")
           DEPLOY_PATH="${{ secrets.DEPLOY_PATH || '/var/www/html' }}"
 
@@ -78,74 +73,61 @@ jobs:
             fi
           done
 
-          echo "Deploying files to ${{ secrets.VM_USER }}@${{ secrets.VM_IP }}:$DEPLOY_PATH"
+          echo "Deploying to ${{ secrets.VM_USER }}@${{ secrets.VM_IP }}:$DEPLOY_PATH"
 
-          # Deploy using scp (we already set ownership to user, so write is allowed)
-          scp "${FILES[@]}" ${{ secrets.VM_USER }}@${{ secrets.VM_IP }}:$DEPLOY_PATH/
+          # Use rsync with sudo on remote side
+          rsync -avz --progress \
+            --rsync-path="sudo rsync" \
+            "${FILES[@]}" \
+            ${{ secrets.VM_USER }}@${{ secrets.VM_IP }}:$DEPLOY_PATH/
 
-          echo "Deployment completed successfully"
+          echo "✓ Files transferred successfully"
 
-      - name: Set File Permissions
+      - name: Set Permissions & Ownership
         run: |
-          echo "Setting permissions on deployed files..."
           DEPLOY_PATH="${{ secrets.DEPLOY_PATH || '/var/www/html' }}"
+          echo "Setting correct ownership and permissions..."
+
           ssh ${{ secrets.VM_USER }}@${{ secrets.VM_IP }} <<REMOTE
             set -e
-            echo "Setting file permissions to 644..."
-            find "$DEPLOY_PATH" -type f -name "*.html" -exec chmod 644 {} \;
-            find "$DEPLOY_PATH" -type f -name "*.php" -exec chmod 644 {} \;
-            find "$DEPLOY_PATH" -type f -name "*.css" -exec chmod 644 {} \;
-            find "$DEPLOY_PATH" -type f -name "*.js" -exec chmod 644 {} \;
-
-            echo "Setting directory permissions to 755..."
-            find "$DEPLOY_PATH" -type d -exec chmod 755 {} \;
-
-            # Ensure web server ownership
+            # Set web server ownership (Ubuntu: www-data, CentOS/RHEL: apache)
             sudo chown -R www-data:www-data "$DEPLOY_PATH" 2>/dev/null || \
             sudo chown -R apache:apache "$DEPLOY_PATH" 2>/dev/null || \
-            echo "Note: Could not change ownership (may need manual adjustment)"
+            echo "Warning: Could not set web server ownership"
 
-            echo "Permissions configured"
+            # File permissions: 644
+            sudo find "$DEPLOY_PATH" -type f -name "*.html" -exec chmod 644 {} \;
+            sudo find "$DEPLOY_PATH" -type f -name "*.php" -exec chmod 644 {} \;
+            sudo find "$DEPLOY_PATH" -type f -name "*.css" -exec chmod 644 {} \;
+            sudo find "$DEPLOY_PATH" -type f -name "*.js" -exec chmod 644 {} \;
+
+            # Directory permissions: 755
+            sudo find "$DEPLOY_PATH" -type d -exec chmod 755 {} \;
+
+            echo "✓ Permissions set"
           REMOTE
 
       - name: Verify Deployment
         run: |
           echo "Verifying deployed files..."
-          DEPLOY_PATH="${{ secrets.DEPLOY_PATH || '/var/www/html' }}"
-          ssh ${{ secrets.VM_USER }}@${{ secrets.VM_IP }} "ls -lah \$DEPLOY_PATH/"
-
-          FILE_COUNT=$(ssh ${{ secrets.VM_USER }}@${{ secrets.VM_IP }} "find \$DEPLOY_PATH -type f \( -name '*.html' -o -name '*.php' \) 2>/dev/null | wc -l")
+          ssh ${{ secrets.VM_USER }}@${{ secrets.VM_IP }} "ls -lah ${{ secrets.DEPLOY_PATH || '/var/www/html' }}/"
+          FILE_COUNT=$(ssh ${{ secrets.VM_USER }}@${{ secrets.VM_IP }} "find ${{ secrets.DEPLOY_PATH || '/var/www/html' }} -type f \\( -name '*.html' -o -name '*.php' \\) 2>/dev/null | wc -l")
           echo "Deployed \$FILE_COUNT web file(s)"
-
-      - name: Test HTTP Response
-        run: |
-          echo "Waiting for Apache to serve files..."
-          sleep 3
-
-          echo "Testing HTTP endpoint: http://${{ secrets.VM_IP }}/"
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://${{ secrets.VM_IP }}/ 2>/dev/null || echo "000")
-          echo "HTTP Status: $HTTP_CODE"
-
-          if [ "$HTTP_CODE" = "200" ]; then
-            echo "✓ Site is accessible"
-          else
-            echo "⚠ Site returned $HTTP_CODE (may need firewall check or Apache restart)"
-          fi
 
       - name: Reload Apache
         if: always()
         run: |
-          echo "Reloading Apache (graceful)..."
-          ssh ${{ secrets.VM_USER }}@${{ secrets.VM_IP }} <<'REMOTE'
+          echo "Reloading Apache..."
+          ssh ${{ secrets.VM_USER }}@${{ secrets.VM_IP }} <<REMOTE
             set -e
-            # Try various Apache service names
+            # Try different service names
             if command -v systemctl &> /dev/null; then
               sudo systemctl reload apache2 2>/dev/null || \
               sudo systemctl reload httpd 2>/dev/null || \
-              echo "Apache service not found (checked: apache2, httpd)"
+              echo "Note: Could not reload Apache (may need manual restart)"
             else
               sudo apachectl graceful 2>/dev/null || \
-              echo "Could not reload Apache (manual restart may be needed)"
+              echo "Note: Could not reload Apache"
             fi
           REMOTE
 
@@ -153,25 +135,21 @@ jobs:
         if: always()
         run: |
           echo "=========================================="
-          echo "  DEPLOYMENT SUMMARY"
+          echo "  DEPLOYMENT COMPLETE"
           echo "=========================================="
-          echo "Status:        ${{ job.status }}"
-          echo "VM IP:         ${{ secrets.VM_IP }}"
-          echo "VM User:       ${{ secrets.VM_USER }}"
-          echo "Deploy Path:   ${{ secrets.DEPLOY_PATH || '/var/www/html' }}"
-          echo "Commit:        ${{ github.sha }}"
-          echo "Branch:        ${{ github.ref_name }}"
+          echo "Status:       ${{ job.status }}"
+          echo "VM IP:        ${{ secrets.VM_IP }}"
+          echo "VM User:      ${{ secrets.VM_USER }}"
+          echo "Deploy Path:  ${{ secrets.DEPLOY_PATH || '/var/www/html' }}"
+          echo "Commit:       ${{ github.sha }}"
           echo "=========================================="
           echo ""
-          echo "Next steps:"
-          echo "1. Visit: http://${{ secrets.VM_IP }}/"
-          echo "2. PHP Status: http://${{ secrets.VM_IP }}/app.php"
-          echo "3. Check logs on VM: sudo tail -f /var/log/apache2/error.log"
+          echo "→ http://${{ secrets.VM_IP }}/"
+          echo "→ http://${{ secrets.VM_IP }}/app.php"
           echo ""
 
       - name: Cleanup SSH Keys
         if: always()
         run: |
-          # Always clean up sensitive data
           rm -rf ~/.ssh
-          echo "SSH credentials removed from runner"
+          echo "SSH keys cleaned"
