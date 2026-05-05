@@ -1,0 +1,73 @@
+# Dependencies
+node_modules/
+vendor/
+composer.lock
+package-lock.json
+yarn.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Secrets (never commit these!)
+*.pem
+*.key
+*.crt
+*.pfx
+*.p12
+
+# Kilo specific
+.kilo/workspace/
+.kilo/cache/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Build outputs
+dist/
+build/
+out/
+
+# Uploads (if your app has file uploads)
+uploads/
+media/
+
+# Cache
+.cache/
+.parcel-cache/
+
+# Backup files
+*.bak
+*.backup
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Database
+*.sqlite
+*.db
+
+# Certificates
+ssl/
+certs/
