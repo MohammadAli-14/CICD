@@ -48,15 +48,11 @@ jobs:
 
       - name: Ensure Remote Directory Exists
         run: |
-          echo "Creating/verifying remote directory..."
-          ssh ${{ secrets.VM_USER }}@${{ secrets.VM_IP }} "sudo mkdir -p ${{ secrets.DEPLOY_PATH || '/var/www/html' }}" || {
-            echo "Warning: Could not create directory, attempting without sudo..."
-            ssh ${{ secrets.VM_USER }}@${{ secrets.VM_IP }} "mkdir -p ${{ secrets.DEPLOY_PATH || '/var/www/html' }}" || {
-              echo "Error: Failed to create directory"
-              exit 1
-            }
+          echo "Verifying remote directory: ${{ secrets.DEPLOY_PATH || '/var/www/html' }}"
+          # After chown azureuser:azureuser on VM, user can write directly
+          ssh ${{ secrets.VM_USER }}@${{ secrets.VM_IP }} "mkdir -p ${{ secrets.DEPLOY_PATH || '/var/www/html' }}" || {
+            echo "Warning: Directory may already exist or permission issue"
           }
-          echo "Directory ready"
 
       - name: Deploy Files with Rsync
         run: |
