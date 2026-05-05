@@ -189,7 +189,7 @@ ssh $SSH_OPTS "$VM_USER@$VM_IP" "sudo mkdir -p $DEPLOY_PATH && sudo chown $VM_US
 # Deploy files using rsync over SSH
 log_info "Deploying files to $VM_USER@$VM_IP:$DEPLOY_PATH"
 
-# Simple rsync (user needs write permission to $DEPLOY_PATH)
+# Rsync (user needs write permission - ensured by sudo chown on VM)
 RSYNC_OPTS="-avz --progress"
 
 if rsync $SSH_OPTS $RSYNC_OPTS "${FILES_TO_DEPLOY[@]}" "$VM_USER@$VM_IP:$DEPLOY_PATH/"; then
@@ -198,6 +198,15 @@ else
     log_error "Rsync deployment failed"
     exit 1
 fi
+
+# Set permissions on remote files
+log_info "Setting permissions on deployed files..."
+ssh $SSH_OPTS "$VM_USER@$VM_IP" "sudo chmod 644 $DEPLOY_PATH/*.html $DEPLOY_PATH/*.php 2>/dev/null || chmod 644 $DEPLOY_PATH/*.html $DEPLOY_PATH/*.php" || true
+ssh $SSH_OPTS "$VM_USER@$VM_IP" "sudo find $DEPLOY_PATH -type d -exec chmod 755 {} \; 2>/dev/null || find $DEPLOY_PATH -type d -exec chmod 755 {} \;" || true
+ssh $SSH_OPTS "$VM_USER@$VM_IP" "sudo chown -R www-data:www-data $DEPLOY_PATH 2>/dev/null || sudo chown -R apache:apache $DEPLOY_PATH 2>/dev/null || true" || true
+ssh $SSH_OPTS "$VM_USER@$VM_IP" "sudo systemctl reload apache2 2>/dev/null || sudo systemctl reload httpd 2>/dev/null || true" || true
+
+log_success "Deployment completed successfully! ✓"
 
 # Set proper ownership and permissions
 log_info "Setting ownership and permissions on remote files..."

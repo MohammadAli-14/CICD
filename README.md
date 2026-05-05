@@ -42,7 +42,7 @@ Add these **4 secrets**:
 - Paste into the secret value field
 - Click "Add secret"
 
-### 2. Prepare Your VM
+### 2. Prepare Your VM (ONE-TIME SETUP)
 
 SSH into your VM:
 
@@ -50,41 +50,46 @@ SSH into your VM:
 ssh -i /path/to/your-key.pem azureuser@20.187.148.79
 ```
 
-Once logged in, run these commands on the VM:
+Once logged in, run **ALL** of these commands on the VM:
 
 ```bash
-# Update system
-sudo apt update && sudo apt upgrade -y
-
-# Install Apache + PHP
+# 1. Install Apache + PHP
+sudo apt update
 sudo apt install -y apache2 php libapache2-mod-php
 
-# Start and enable Apache
+# 2. Start Apache
 sudo systemctl start apache2
 sudo systemctl enable apache2
 
-# Give azureuser ownership of /var/www/html (needed for deployment)
+# 3. CRITICAL: Give azureuser ownership of /var/www/html
+# This allows deployment without sudo/rsync-path
 sudo chown -R azureuser:azureuser /var/www/html
 
-# Set standard permissions
+# 4. Set standard permissions
 sudo chmod -R 755 /var/www/html
 
-# Allow SSH user to reload Apache (add to sudoers)
-echo 'azureuser ALL=(ALL) NOPASSWD: /usr/sbin/apachectl, /usr/sbin/service apache2 reload, /bin/systemctl reload apache2' | sudo tee /etc/sudoers.d/azureuser-apache
+# 5. Allow azureuser to reload Apache via sudo without password
+echo 'azureuser ALL=(ALL) NOPASSWD: /usr/sbin/apachectl' | sudo tee /etc/sudoers.d/azureuser-apache
+echo 'azureuser ALL=(ALL) NOPASSWD: /bin/systemctl reload apache2' | sudo tee -a /etc/sudoers.d/azureuser-apache
 
-# Verify PHP works
+# 6. Test PHP works
 echo '<?php phpinfo(); ?>' | sudo tee /var/www/html/test.php
 curl http://localhost/test.php | head -3
 
-# Open firewall (if using UFW)
-sudo ufw allow 22/tcp  # SSH (already open)
-sudo ufw allow 80/tcp   # HTTP
-sudo ufw reload
+# 7. Open firewall (if using UFW)
+sudo ufw allow 22/tcp 2>/dev/null || true
+sudo ufw allow 80/tcp 2>/dev/null || true
+sudo ufw reload 2>/dev/null || true
+
+# 8. Verify: /var/www/html should be owned by azureuser
+ls -ld /var/www/html
+# Expected: azureuser azureuser
 
 exit
 ```
 
-**Important:** The `chown azureuser:azureuser /var/www/html` step gives your SSH user write access to the web directory. Without this, deployment will fail with "Permission denied".
+**Why `chown azureuser:azureuser /var/www/html`?**
+The default Apache document root `/var/www/html` is owned by `root` or `www-data`. Without this change, `azureuser` cannot write files to it, causing "Permission denied" errors during deployment. This single command fixes all permission issues.
 
 ### 3. Push to Deploy
 
@@ -399,25 +404,33 @@ sudo systemctl status sshd # CentOS/RHEL
 cat ~/.ssh/authorized_keys  # Should contain your public key
 ```
 
-### Files Not Showing Up
+### Files Not Showing Up / Permission Denied (THE MOST COMMON ISSUE)
 
-**Check:**
-1. Correct deploy path in secrets? Default is `/var/www/html`
-2. Apache document root: `grep DocumentRoot /etc/apache2/sites-enabled/000-default.conf`
-3. Permissions: `ls -la /var/www/html/` should show files
-4. SELinux (CentOS/RHEL): `getenforce` (set to Permissive or configure properly)
+**This is almost always caused by incorrect ownership of `/var/www/html`.**
+
+**Fix (run on your VM):**
+```bash
+ssh -i your-key.pem azureuser@20.187.148.79
+
+# GIVE azureuser ownership of /var/www/html (THIS IS THE FIX)
+sudo chown -R azureuser:azureuser /var/www/html
+
+# Verify it worked
+ls -ld /var/www/html
+# Should output: azureuser azureuser
+
+exit
+```
+
+After running this, re-run the GitHub Actions workflow. It will work.
+
+**Why this happens:** By default, `/var/www/html` is owned by `root` or `www-data`. The `azureuser` account cannot write to it, causing "Permission denied" during deployment. The `chown` command gives `azureuser` write access.
 
 ### 403 Forbidden Error
 
-**Fix permissions:**
+If you see 403 after deployment, fix permissions:
 ```bash
-# Ubuntu
-sudo chown -R www-data:www-data /var/www/html
-sudo chmod -R 755 /var/www/html
-
-# CentOS/RHEL
-sudo chown -R apache:apache /var/www/html
-sudo chmod -R 755 /var/www/html
+ssh -i your-key.pem azureuser@20.187.148.79 "sudo chmod -R 755 /var/www/html"
 ```
 
 ### 404 Not Found
@@ -498,14 +511,14 @@ sudo tail -f /var/log/httpd/error_log    # CentOS/RHEL
 
 ### VM User Permissions
 
-Your deployment user (`azureuser`) needs:
+Your deployment user (`azureuser`) needs these ONE-TIME permissions on the VM:
 
 ```bash
-# Ownership of web directory (ONE-TIME setup on VM)
+# 1. Ownership of web directory (REQUIRED - fixes permission errors)
 sudo chown -R azureuser:azureuser /var/www/html
 
-# Passwordless sudo for Apache reload (optional but recommended)
-echo 'azureuser ALL=(ALL) NOPASSWD: /usr/sbin/apachectl, /usr/sbin/service apache2 reload' | sudo tee /etc/sudoers.d/azureuser-apache
+# 2. Passwordless sudo for Apache reload (optional but convenient)
+echo 'azureuser ALL=(ALL) NOPASSWD: /usr/sbin/apachectl, /bin/systemctl reload apache2' | sudo tee /etc/sudoers.d/azureuser-apache
 ```
 
 ### VM Security

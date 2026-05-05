@@ -8,165 +8,49 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
 
     steps:
-      - name: Checkout Code
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup SSH
         run: |
-          # Create .ssh directory
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
-
-          # Write private key
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-
-          # Add VM to known hosts (avoid host key verification)
           ssh-keyscan -H ${{ secrets.VM_IP }} >> ~/.ssh/known_hosts 2>/dev/null || true
 
-          # Create SSH config
-          cat > ~/.ssh/config <<EOF
-          Host ${{ secrets.VM_IP }}
-            HostName ${{ secrets.VM_IP }}
-            User ${{ secrets.VM_USER }}
-            IdentityFile ~/.ssh/id_rsa
-            StrictHostKeyChecking no
-            UserKnownHostsFile=/dev/null
-            ConnectTimeout=10
-            BatchMode=yes
-          EOF
-
-          chmod 600 ~/.ssh/config
-          ls -la ~/.ssh/
-
       - name: Test SSH Connection
+        run: ssh ${{ secrets.VM_USER }}@${{ secrets.VM_IP }} 'echo SSH_OK'
+
+      - name: Deploy Files
         run: |
-          echo "Testing SSH to ${{ secrets.VM_USER }}@${{ secrets.VM_IP }}..."
-          ssh -o ConnectTimeout=10 ${{ secrets.VM_USER }}@${{ secrets.VM_IP }} 'echo "SSH OK"'
-          echo "✓ SSH connection successful"
-
-      - name: Ensure Remote Directory
-        run: |
-          echo "Creating remote directory: ${{ secrets.DEPLOY_PATH || '/var/www/html' }}"
-          ssh ${{ secrets.VM_USER }}@${{ secrets.VM_IP }} "mkdir -p ${{ secrets.DEPLOY_PATH || '/var/www/html' }}" || {
-            echo "Trying with sudo..."
-            ssh ${{ secrets.VM_USER }}@${{ secrets.VM_IP }} "sudo mkdir -p ${{ secrets.DEPLOY_PATH || '/var/www/html' }} && sudo chown ${{ secrets.VM_USER }}:${{ secrets.VM_USER }} ${{ secrets.DEPLOY_PATH || '/var/www/html' }}"
-          }
-
-      - name: Deploy Files with Rsync
-        run: |
-          # Files to deploy
-          FILES=("index.html" "app.php")
-
-          # Verify files exist
-          for file in "${FILES[@]}"; do
-            if [ -f "$file" ]; then
-              echo "Found: $file"
-            else
-              echo "Warning: $file not found"
-            fi
-          done
-
-          # Rsync using SSH config
-          echo "Starting rsync deployment..."
           DEPLOY_PATH="${{ secrets.DEPLOY_PATH || '/var/www/html' }}"
+
+          # Deploy using rsync (azureuser has write access after chown)
           rsync -avz --progress \
-            --delete \
-            "${FILES[@]}" \
+            index.html app.php \
             ${{ secrets.VM_USER }}@${{ secrets.VM_IP }}:$DEPLOY_PATH/
 
-          echo "Rsync completed"
+          echo "✓ Files deployed"
 
-      - name: Set File Permissions
+      - name: Set Permissions
         run: |
-          echo "Setting permissions on remote server..."
           DEPLOY_PATH="${{ secrets.DEPLOY_PATH || '/var/www/html' }}"
-          ssh ${{ secrets.VM_USER }}@${{ secrets.VM_IP }} <<REMOTE
-            set -e
-            echo "Setting file permissions to 644..."
-            find "$DEPLOY_PATH" -type f -name "*.html" -exec chmod 644 {} \;
-            find "$DEPLOY_PATH" -type f -name "*.php" -exec chmod 644 {} \;
-            find "$DEPLOY_PATH" -type f -name "*.css" -exec chmod 644 {} \;
-            find "$DEPLOY_PATH" -type f -name "*.js" -exec chmod 644 {} \;
+          ssh ${{ secrets.VM_USER }}@${{ secrets.VM_IP }} <<EOF
+            # Set standard web permissions
+            sudo chmod 644 $DEPLOY_PATH/*.html $DEPLOY_PATH/*.php 2>/dev/null || chmod 644 $DEPLOY_PATH/*.html $DEPLOY_PATH/*.php
+            sudo find $DEPLOY_PATH -type d -exec chmod 755 {} \;
+            sudo chown -R www-data:www-data $DEPLOY_PATH 2>/dev/null || sudo chown -R apache:apache $DEPLOY_PATH 2>/dev/null || true
+            sudo systemctl reload apache2 2>/dev/null || sudo systemctl reload httpd 2>/dev/null || true
+          EOF
 
-            echo "Setting directory permissions to 755..."
-            find "$DEPLOY_PATH" -type d -exec chmod 755 {} \;
-
-            # Try setting web server ownership (Ubuntu uses www-data, CentOS uses apache)
-            sudo chown -R www-data:www-data "$DEPLOY_PATH" 2>/dev/null || \
-            sudo chown -R apache:apache "$DEPLOY_PATH" 2>/dev/null || \
-            echo "Keeping current ownership"
-
-            echo "Permissions configured"
-          REMOTE
-
-      - name: Verify Deployment
+      - name: Verify
         run: |
-          echo "Verifying deployed files..."
-          DEPLOY_PATH="${{ secrets.DEPLOY_PATH || '/var/www/html' }}"
-          ssh ${{ secrets.VM_USER }}@${{ secrets.VM_IP }} "ls -lah \$DEPLOY_PATH/"
+          ssh ${{ secrets.VM_USER }}@${{ secrets.VM_IP }} "ls -lah ${{ secrets.DEPLOY_PATH || '/var/www/html' }}/"
 
-          FILE_COUNT=$(ssh ${{ secrets.VM_USER }}@${{ secrets.VM_IP }} "find \$DEPLOY_PATH -type f \( -name '*.html' -o -name '*.php' \) 2>/dev/null | wc -l")
-          echo "Deployed \$FILE_COUNT web file(s)"
-
-      - name: Test HTTP Response
-        run: |
-          echo "Waiting for Apache to serve files..."
-          sleep 3
-
-          echo "Testing HTTP endpoint: http://${{ secrets.VM_IP }}/"
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://${{ secrets.VM_IP }}/ 2>/dev/null || echo "000")
-          echo "HTTP Status: $HTTP_CODE"
-
-          if [ "$HTTP_CODE" = "200" ]; then
-            echo "✓ Site is accessible"
-          else
-            echo "⚠ Site returned $HTTP_CODE (may need firewall check or Apache restart)"
-          fi
-
-      - name: Reload Apache
+      - name: Cleanup
         if: always()
-        run: |
-          echo "Reloading Apache (graceful)..."
-          ssh ${{ secrets.VM_USER }}@${{ secrets.VM_IP }} <<'REMOTE'
-            set -e
-            # Try various Apache service names
-            if command -v systemctl &> /dev/null; then
-              sudo systemctl reload apache2 2>/dev/null || \
-              sudo systemctl reload httpd 2>/dev/null || \
-              echo "Apache service not found (checked: apache2, httpd)"
-            else
-              sudo apachectl graceful 2>/dev/null || \
-              echo "Could not reload Apache (manual restart may be needed)"
-            fi
-          REMOTE
-
-      - name: Deployment Summary
-        if: always()
-        run: |
-          echo "=========================================="
-          echo "  DEPLOYMENT SUMMARY"
-          echo "=========================================="
-          echo "Status:        ${{ job.status }}"
-          echo "VM IP:         ${{ secrets.VM_IP }}"
-          echo "VM User:       ${{ secrets.VM_USER }}"
-          echo "Deploy Path:   ${{ secrets.DEPLOY_PATH | default('/var/www/html') }}"
-          echo "Commit:        ${{ github.sha }}"
-          echo "Branch:        ${{ github.ref_name }}"
-          echo "=========================================="
-          echo ""
-          echo "Next steps:"
-          echo "1. Visit: http://${{ secrets.VM_IP }}/"
-          echo "2. PHP Status: http://${{ secrets.VM_IP }}/app.php"
-          echo "3. Check logs on VM: sudo tail -f /var/log/apache2/error.log"
-          echo ""
-
-      - name: Cleanup SSH Keys
-        if: always()
-        run: |
-          # Always clean up sensitive data
-          rm -rf ~/.ssh
-          echo "SSH credentials removed from runner"
+        run: rm -rf ~/.ssh
